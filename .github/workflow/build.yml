@@ -1,0 +1,73 @@
+name: Build Kick909 VST3
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:   # lets you press "Run workflow" manually
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            artifact: Kick909-VST3-Windows
+          - name: macOS
+            os: macos-latest
+            artifact: Kick909-VST3-macOS
+          - name: Linux
+            os: ubuntu-latest
+            artifact: Kick909-VST3-Linux
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Finds CMakeLists.txt whether it's in the repo root or inside a Kick909/ folder
+      - name: Locate project
+        shell: bash
+        run: |
+          CMAKE_FILE=$(find . -maxdepth 2 -name CMakeLists.txt -not -path "./build/*" | head -n 1)
+          echo "Found: $CMAKE_FILE"
+          echo "PROJECT_DIR=$(dirname "$CMAKE_FILE")" >> "$GITHUB_ENV"
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev libx11-dev libxext-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxcomposite-dev libfreetype-dev libfontconfig1-dev \
+            libgl1-mesa-dev libcurl4-openssl-dev
+
+      - name: Configure (Windows / Linux)
+        if: runner.os != 'macOS'
+        shell: bash
+        run: cmake -S "$PROJECT_DIR" -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Configure (macOS, universal Intel + Apple Silicon)
+        if: runner.os == 'macOS'
+        run: >
+          cmake -S "$PROJECT_DIR" -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Show output
+        shell: bash
+        run: find build -name "*.vst3" -maxdepth 6
+
+      - name: Upload VST3
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: build/**/VST3/*.vst3
+          if-no-files-found: error
