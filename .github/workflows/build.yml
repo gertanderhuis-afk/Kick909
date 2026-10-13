@@ -45,9 +45,16 @@ jobs:
             libxcursor-dev libxcomposite-dev libfreetype-dev libfontconfig1-dev \
             libgl1-mesa-dev libcurl4-openssl-dev
 
-      - name: Configure (Windows / Linux)
-        if: runner.os != 'macOS'
+      - name: Configure (Windows, static runtime so no VC++ redistributable is needed)
+        if: runner.os == 'Windows'
         shell: bash
+        run: >
+          cmake -S "$PROJECT_DIR" -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
         run: cmake -S "$PROJECT_DIR" -B build -DCMAKE_BUILD_TYPE=Release
 
       - name: Configure (macOS, universal Intel + Apple Silicon)
@@ -61,14 +68,36 @@ jobs:
       - name: Build
         run: cmake --build build --config Release --parallel
 
-      - name: Show output
+      - name: Find VST3 folder
         shell: bash
-        run: find build -name "*.vst3" -maxdepth 6
+        run: |
+          VST3_DIR=$(find build -type d -name VST3 -path "*artefacts*" | head -n 1)
+          echo "VST3 folder: $VST3_DIR"
+          find "$VST3_DIR" -maxdepth 4
+          echo "VST3_DIR=$VST3_DIR" >> "$GITHUB_ENV"
 
+      # Loads the plugin the way a DAW does and prints the real error if it fails
+      - name: Validate plugin (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        continue-on-error: true
+        run: |
+          curl -L -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip
+          7z x pluginval.zip -opluginval
+          ./pluginval/pluginval.exe --strictness-level 5 --validate "$(find "$VST3_DIR" -maxdepth 1 -name '*.vst3' | head -n 1)"
+
+      - name: Validate plugin (macOS)
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        run: |
+          curl -L -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+          unzip -q pluginval.zip
+          ./pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --validate "$(find "$VST3_DIR" -maxdepth 1 -name '*.vst3' | head -n 1)"
+
+      # Uploads the whole folder, so the "Kick 909.vst3" bundle keeps its name and structure
       - name: Upload VST3
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: build/**/VST3/*.vst3
+          path: ${{ env.VST3_DIR }}
           if-no-files-found: error
-          
